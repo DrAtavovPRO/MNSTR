@@ -87,9 +87,29 @@ except ImportError as e:
     # Базовые функции логирования для диагностики
     def get_logger(name, component='default'):
         logger = logging.getLogger(name)
-        handler = logging.StreamHandler()
-        handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(name)s: %(message)s'))
-        logger.addHandler(handler)
+        
+        # Проверяем, настроен ли уже логгер
+        if not logger.handlers:
+            # Настраиваем уровень логирования
+            logger.setLevel(logging.DEBUG)
+            
+            # Консольный обработчик
+            console_handler = logging.StreamHandler()
+            console_handler.setLevel(logging.INFO)
+            console_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(name)s: %(message)s'))
+            logger.addHandler(console_handler)
+            
+            # Файловый обработчик, если нужно
+            try:
+                log_dir = os.path.join('logs', 'brain', indicators)
+                os.makedirs(log_dir, exist_ok=True)
+                file_handler = logging.FileHandler(os.path.join(log_dir, f"{name}.log"))
+                file_handler.setLevel(logging.DEBUG)
+                file_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(name)s [%(module)s:%(lineno)d]: %(message)s'))
+                logger.addHandler(file_handler)
+            except Exception as e:
+                print(f"Не удалось настроить файловый обработчик логов: {e}")
+        
         return logger
     
     def send_telegram(message, priority="normal"):
@@ -741,25 +761,29 @@ class RSI(BaseIndicator):
     - Адаптивные уровни перекупленности/перепроданности на основе исторических данных
     """
     
-    def __init__(self, params: Dict = None):
+    def __init__(self, params: Dict = None, name: str = None):
         """
         Инициализирует индикатор RSI с расширенными возможностями анализа.
         
         Args:
             params: Словарь с параметрами индикатора
-                - period: Период расчета (обычно 14)
-                - overbought: Уровень перекупленности (обычно 70)
-                - oversold: Уровень перепроданности (обычно 30)
-                - adaptive_levels: Использовать ли адаптивные уровни (True/False)
-                - context_window: Размер окна для контекстуального анализа (в барах)
+            name: Имя индикатора (если не указано, используется имя класса)
         """
-        super().__init__(params)
+        # Вызываем конструктор родительского класса
+        super().__init__(params, name)
+        
+        # Инициализируем параметры
         self.period = self.params.get('period', 14)
         self.overbought = self.params.get('overbought', 70)
         self.oversold = self.params.get('oversold', 30)
         self.adaptive_levels = self.params.get('adaptive_levels', True)
-        self.context_window = self.params.get('context_window', 90)  # ~90 дней для таймфрейма 1ч
-    
+        self.context_window = self.params.get('context_window', 90)
+        
+        # Логируем параметры для отладки
+        self.logger.debug(f"RSI инициализирован с параметрами: period={self.period}, "
+                         f"overbought={self.overbought}, oversold={self.oversold}, "
+                         f"adaptive_levels={self.adaptive_levels}")
+
     def calculate(self, df: pd.DataFrame) -> pd.DataFrame:
         """
         Рассчитывает RSI и добавляет его в DataFrame.
@@ -774,18 +798,33 @@ class RSI(BaseIndicator):
         Returns:
             DataFrame с добавленным столбцом 'rsi'
         """
+        self.logger.info(f"Начинаем расчет RSI с периодом {self.period}")
+        self.logger.debug(f"Размер входного DataFrame: {len(df)} строк, столбцы: {list(df.columns)}")
+        
         if 'close' not in df.columns:
+            self.logger.error("DataFrame не содержит столбец 'close', необходимый для расчета RSI")
             raise ValueError("DataFrame должен содержать столбец 'close' для расчета RSI")
         
         try:
+            # Логируем первые несколько значений цены закрытия
+            self.logger.debug(f"Первые 5 значений цены закрытия: {df['close'].head(5).tolist()}")
+            
             # Оптимизированный расчет RSI с использованием векторизации Pandas
+            self.logger.debug("Расчет изменений цены закрытия (close_delta)")
             close_delta = df['close'].diff()
+            self.logger.debug(f"Первые 5 значений close_delta: {close_delta.head(5).tolist()}")
             
             # Получаем положительные и отрицательные изменения
+            self.logger.debug("Разделение на положительные и отрицательные изменения")
             up = close_delta.where(close_delta > 0, 0)
             down = -close_delta.where(close_delta < 0, 0)
             
+            # Логируем первые несколько значений up и down
+            self.logger.debug(f"Первые 5 значений up: {up.head(5).tolist()}")
+            self.logger.debug(f"Первые 5 значений down: {down.head(5).tolist()}")
+            
             # Рассчитываем среднее значение положительных и отрицательных изменений
+            self.logger.debug(f"Расчет экспоненциальных средних с периодом {self.period}")
             avg_gain = up.ewm(com=self.period-1, min_periods=self.period).mean()
             avg_loss = down.ewm(com=self.period-1, min_periods=self.period).mean()
             
@@ -793,13 +832,20 @@ class RSI(BaseIndicator):
             avg_loss = avg_loss.where(avg_loss != 0, 0.00001)
             
             # Рассчитываем relative strength (RS)
+            self.logger.debug("Расчет Relative Strength (RS)")
             rs = avg_gain / avg_loss
             
             # Рассчитываем RSI
+            self.logger.debug("Расчет RSI на основе RS")
             df['rsi'] = 100 - (100 / (1 + rs))
+            
+            # Логируем первые и последние значения RSI
+            self.logger.debug(f"Первые 5 значений RSI: {df['rsi'].head(5).tolist()}")
+            self.logger.debug(f"Последние 5 значений RSI: {df['rsi'].tail(5).tolist()}")
             
             # Если используются адаптивные уровни, рассчитываем их
             if self.adaptive_levels and len(df) > 30:
+                self.logger.debug("Расчет адаптивных уровней RSI")
                 # Рассчитываем исторические перцентили RSI
                 df['rsi_80_percentile'] = df['rsi'].rolling(window=30).apply(
                     lambda x: np.percentile(x, 80) if len(x.dropna()) > 0 else 70
@@ -811,12 +857,21 @@ class RSI(BaseIndicator):
                 # Заполняем NaN значения для первых строк
                 df['rsi_80_percentile'] = df['rsi_80_percentile'].fillna(70)
                 df['rsi_20_percentile'] = df['rsi_20_percentile'].fillna(30)
+                
+                self.logger.debug(f"Средний верхний адаптивный уровень: {df['rsi_80_percentile'].mean()}")
+                self.logger.debug(f"Средний нижний адаптивный уровень: {df['rsi_20_percentile'].mean()}")
             
             # Заполняем NaN на 50 - нейтральное значение для RSI
             df['rsi'] = df['rsi'].fillna(50)
             
             # Добавляем столбец для скорости изменения RSI (для определения импульса)
             df['rsi_change'] = df['rsi'].diff(3)
+            
+            self.logger.info("Расчет RSI успешно завершен")
+            
+            # Логируем базовую статистику результатов
+            self.logger.info(f"Статистика RSI: min={df['rsi'].min():.2f}, max={df['rsi'].max():.2f}, mean={df['rsi'].mean():.2f}")
+            self.logger.info(f"Текущее значение RSI: {df['rsi'].iloc[-1]:.2f}")
             
             return df
         except Exception as e:
@@ -1703,11 +1758,15 @@ class IndicatorEngine:
                 os.path.join(self.config['paths'].get('DATA_ENGINE', {}).get('current', 'data/brain/data_engine/current'), f"{symbol}.json")
             ]
             
+            # Для отладки выведем все проверяемые пути
+            self.logger.debug(f"Ищем данные для {symbol} ({timeframe}) в путях: {json_paths}")
+            
             # Ищем первый существующий файл
             json_path = None
             for path in json_paths:
                 if os.path.exists(path):
                     json_path = path
+                    self.logger.debug(f"Найден файл данных: {path}")
                     break
             
             if not json_path:
@@ -1718,6 +1777,9 @@ class IndicatorEngine:
             self.logger.info(f"Загружаем данные из JSON: {json_path}")
             with open(json_path, 'r') as f:
                 data = json.load(f)
+            
+            # Вывод первых нескольких элементов для отладки
+            self.logger.debug(f"Первые 3 элемента JSON: {json.dumps(data[:3] if len(data) > 3 else data, indent=2)}")
             
             # Преобразуем специфический формат JSON в DataFrame
             rows = []
@@ -1759,9 +1821,13 @@ class IndicatorEngine:
             # Добавляем атрибут с символом монеты
             df.symbol = symbol
             
-            self.logger.info(f"Успешно загружены данные для {symbol} ({timeframe}), {len(df)} свечей")
-            return df
+            # После загрузки данных добавляем расширенную информацию
+            if len(df) > 0:
+                self.logger.info(f"Данные загружены успешно: {len(df)} строк, столбцы: {list(df.columns)}")
+                self.logger.debug(f"Первые 3 строки данных:\n{df.head(3)}")
             
+            return df
+                
         except Exception as e:
             self.logger.error(f"Ошибка при загрузке данных для {symbol} ({timeframe}): {e}")
             self.logger.debug(traceback.format_exc())
