@@ -208,7 +208,7 @@ class BaseIndicator(ABC):
         """
         self.params = params or {}
         self.name = name or self.__class__.__name__
-        self.logger = get_module_logger(f"indicator.{self.name.lower()}")
+        self.logger = get_clean_logger(f"indicator.{self.name.lower()}")
         
     @abstractmethod
     def calculate(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -359,7 +359,7 @@ class IndicatorRegistry:
         if cls._instance is None:
             cls._instance = super(IndicatorRegistry, cls).__new__(cls)
             cls._instance.indicators = {}
-            cls._instance.logger = get_logger("indicator_registry")
+            cls._instance.logger = get_clean_logger("indicator_registry")
         return cls._instance
     
     def register(self, indicator_class: type, name: str = None, params: Dict = None) -> None:
@@ -434,7 +434,7 @@ class DataCache:
         """
         self.memory_cache = {}
         self.use_redis = use_redis
-        self.logger = get_module_logger("data_storage")
+        self.logger = get_clean_logger("data_storage")
         
         if use_redis:
             try:
@@ -519,7 +519,7 @@ class DataStorage:
         """
         self.base_path = base_path
         self.use_parquet = use_parquet
-        self.logger = get_logger("data_storage", component='indicator_engine')
+        self.logger = get_clean_logger("data_storage")
         
         if use_parquet:
             try:
@@ -699,7 +699,7 @@ class ParallelProcessor:
         """
         self.max_workers = max_workers
         self.chunk_size = chunk_size
-        self.logger = get_module_logger("parallel_processor")
+        self.logger = get_clean_logger("parallel_processor")
     
     def process_symbols(self, symbols: List[str], process_func, **kwargs) -> Dict:
         """
@@ -1707,7 +1707,7 @@ class IndicatorEngine:
             config: Словарь с конфигурацией движка
         """
         self.config = config
-        self.logger = get_module_logger("indicator_engine")
+        self.logger = get_clean_logger("indicator_engine")
         self.logger.info("Инициализация IndicatorEngine")
         
         # Инициализация утилит и хелперов
